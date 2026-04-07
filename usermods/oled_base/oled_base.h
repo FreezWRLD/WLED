@@ -16,13 +16,6 @@ public:
   static bool isViewActive(uint8_t viewId);
   static bool isCurrentView(uint8_t viewId);
   static void nextView();
-
-  void setup() override;
-  void loop() override;
-  void addToConfig(JsonObject& root) override;
-  bool readFromConfig(JsonObject& root) override;
-  void addToJsonInfo(JsonObject& root) override;
-  uint16_t getId() override;
 };
 
 #endif

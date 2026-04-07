@@ -18,15 +18,15 @@ public:
   static uint32_t viewMask;
 
 private:
-  int8_t  _sda          = OLED_SDA_PIN;
-  int8_t  _scl          = OLED_SCL_PIN;
-  bool    _flip         = false;
-  uint8_t _contrast     = 200;
-  bool    _enabled      = true;
-  bool    _autoCycleCfg = false;
-  uint16_t _cycleSecCfg = 10;
-  uint32_t _lastCycleMs = 0;
-  bool    _initDone     = false;
+  int8_t   _sda          = OLED_SDA_PIN;
+  int8_t   _scl          = OLED_SCL_PIN;
+  bool     _flip         = false;
+  uint8_t  _contrast     = 200;
+  bool     _enabled      = true;
+  bool     _autoCycleCfg = false;
+  uint16_t _cycleSecCfg  = 10;
+  uint32_t _lastCycleMs  = 0;
+  bool     _initDone     = false;
 
   void initDisplay() {
     if (display) {
@@ -55,7 +55,7 @@ public:
   void setup() override {
     if (_enabled) initDisplay();
     autoCycle = _autoCycleCfg;
-    cycleSeconds = _cycleSecCfg;
+    cycleSeconds = _cycleSecCfg < 1 ? 1 : _cycleSecCfg;
     _lastCycleMs = millis();
     _initDone = true;
   }
@@ -145,17 +145,9 @@ bool OledBaseUsermodImpl::autoCycle = false;
 uint16_t OledBaseUsermodImpl::cycleSeconds = 10;
 uint32_t OledBaseUsermodImpl::viewMask = 0;
 
-U8X8_SSD1306_128X64_NONAME_HW_I2C* OledBaseUsermod::getDisplay() {
-  return ready ? display : nullptr;
-}
-
-bool OledBaseUsermod::isReady() {
-  return ready;
-}
-
-uint8_t OledBaseUsermod::getActiveView() {
-  return OledBaseUsermodImpl::activeView;
-}
+U8X8_SSD1306_128X64_NONAME_HW_I2C* OledBaseUsermod::getDisplay() { return ready ? display : nullptr; }
+bool OledBaseUsermod::isReady() { return ready; }
+uint8_t OledBaseUsermod::getActiveView() { return OledBaseUsermodImpl::activeView; }
 
 void OledBaseUsermod::setViewActive(uint8_t viewId, bool enabled) {
   if (viewId < 1 || viewId > 31) return;
@@ -176,6 +168,7 @@ void OledBaseUsermod::setViewActive(uint8_t viewId, bool enabled) {
         break;
       }
     }
+    if (display && ready) display->clearDisplay();
   }
 }
 
