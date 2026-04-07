@@ -8,6 +8,7 @@ private:
   uint8_t _registeredId  = 1;
   bool    _showSeconds   = true;
   bool    _hour24        = true;
+  bool    _blinkColon    = true;
   uint8_t _timeFontSize  = 2;
   char    _timePos[4]    = "tl";
   bool    _showDate      = true;
@@ -51,35 +52,47 @@ private:
     OledBaseUsermod::setViewActive(_registeredId, _enabled);
   }
 
+  void formatTime(char* buf, size_t len, const tm* ti) {
+    char sep = ':';
+    if (_blinkColon && (ti->tm_sec % 2)) sep = ' ';
+
+    if (_hour24) {
+      if (_showSeconds) {
+        snprintf(buf, len, "%02d%c%02d%c%02d", ti->tm_hour, sep, ti->tm_min, sep, ti->tm_sec);
+      } else {
+        snprintf(buf, len, "%02d%c%02d", ti->tm_hour, sep, ti->tm_min);
+      }
+    } else {
+      int h = ti->tm_hour % 12;
+      if (h == 0) h = 12;
+      if (_showSeconds) {
+        snprintf(buf, len, "%02d%c%02d%c%02d%s", h, sep, ti->tm_min, sep, ti->tm_sec, ti->tm_hour >= 12 ? "PM" : "AM");
+      } else {
+        snprintf(buf, len, "%02d%c%02d%s", h, sep, ti->tm_min, ti->tm_hour >= 12 ? "PM" : "AM");
+      }
+    }
+  }
+
   void draw() {
     auto* d = OledBaseUsermod::getDisplay();
     if (!d) return;
     d->clearDisplay();
 
-    char buf[20];
+    char buf[24];
     time_t t = localTime;
     struct tm* ti = localtime(&t);
     if (ti->tm_year < 100) return;
 
-    if (_hour24) {
-      if (_showSeconds) sprintf(buf, "%02d:%02d:%02d", ti->tm_hour, ti->tm_min, ti->tm_sec);
-      else sprintf(buf, "%02d:%02d", ti->tm_hour, ti->tm_min);
-    } else {
-      int h = ti->tm_hour % 12;
-      if (h == 0) h = 12;
-      if (_showSeconds) sprintf(buf, "%02d:%02d:%02d%s", h, ti->tm_min, ti->tm_sec, ti->tm_hour >= 12 ? "PM" : "AM");
-      else sprintf(buf, "%02d:%02d%s", h, ti->tm_min, ti->tm_hour >= 12 ? "PM" : "AM");
-    }
-
+    formatTime(buf, sizeof(buf), ti);
     OledPos tp = resolvePos(_timePos, _timeFontSize >= 3);
     d->setFont(getFont(_timeFontSize));
     d->drawString(tp.col, tp.row, buf);
 
     if (_showDate) {
       switch (_dateFormat) {
-        case 1:  sprintf(buf, "%02d/%02d/%04d", ti->tm_mon+1, ti->tm_mday, ti->tm_year+1900); break;
-        case 2:  sprintf(buf, "%04d-%02d-%02d", ti->tm_year+1900, ti->tm_mon+1, ti->tm_mday); break;
-        default: sprintf(buf, "%02d/%02d/%04d", ti->tm_mday, ti->tm_mon+1, ti->tm_year+1900); break;
+        case 1:  snprintf(buf, sizeof(buf), "%02d/%02d/%04d", ti->tm_mon+1, ti->tm_mday, ti->tm_year+1900); break;
+        case 2:  snprintf(buf, sizeof(buf), "%04d-%02d-%02d", ti->tm_year+1900, ti->tm_mon+1, ti->tm_mday); break;
+        default: snprintf(buf, sizeof(buf), "%02d/%02d/%04d", ti->tm_mday, ti->tm_mon+1, ti->tm_year+1900); break;
       }
       OledPos dp = resolvePos(_datePos, false);
       d->setFont(getFont(_dateFontSize));
@@ -93,7 +106,7 @@ public:
   void loop() override {
     if (!_enabled || !OledBaseUsermod::isCurrentView(_registeredId)) return;
     unsigned long now = millis();
-    uint32_t interval = _showSeconds ? 1000 : 30000;
+    uint32_t interval = (_showSeconds || _blinkColon) ? 1000 : 30000;
     if (now - _lastDraw < interval) return;
     _lastDraw = now;
     draw();
@@ -105,6 +118,7 @@ public:
     top["viewId"]       = _viewId;
     top["showSeconds"]  = _showSeconds;
     top["hour24"]       = _hour24;
+    top["blinkColon"]   = _blinkColon;
     top["timeFontSize"] = _timeFontSize;
     top["timePos"]      = _timePos;
     top["showDate"]     = _showDate;
@@ -121,6 +135,7 @@ public:
     if (top.containsKey("viewId"))       _viewId       = top["viewId"];
     if (top.containsKey("showSeconds"))  _showSeconds  = top["showSeconds"];
     if (top.containsKey("hour24"))       _hour24       = top["hour24"];
+    if (top.containsKey("blinkColon"))   _blinkColon   = top["blinkColon"];
     if (top.containsKey("timeFontSize")) _timeFontSize = top["timeFontSize"];
     if (top.containsKey("showDate"))     _showDate     = top["showDate"];
     if (top.containsKey("dateFontSize")) _dateFontSize = top["dateFontSize"];
