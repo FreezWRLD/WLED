@@ -3,11 +3,11 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
-#define OLED_WEATHER_VIEW_ID 2
-
 class OledWeatherUsermod : public Usermod {
 private:
   bool    _enabled       = false;
+  uint8_t _viewId        = 2;
+  uint8_t _registeredId  = 2;
   char    _apiKey[64]    = "";
   char    _city[32]      = "Epernay";
   char    _country[4]    = "FR";
@@ -25,6 +25,21 @@ private:
   bool    _fetchOk       = false;
   unsigned long _lastFetch = 0;
   unsigned long _lastDraw  = 0;
+
+  uint8_t sanitizeViewId(uint8_t id) {
+    if (id < 1) return 1;
+    if (id > 31) return 31;
+    return id;
+  }
+
+  void syncViewRegistration() {
+    _viewId = sanitizeViewId(_viewId);
+    if (_registeredId != _viewId) {
+      OledBaseUsermod::setViewActive(_registeredId, false);
+      _registeredId = _viewId;
+    }
+    OledBaseUsermod::setViewActive(_registeredId, _enabled);
+  }
 
   void fetchWeather() {
     if (strlen(_apiKey) < 10) return;
@@ -107,12 +122,12 @@ private:
 
 public:
   void setup() override {
-    OledBaseUsermod::setViewActive(OLED_WEATHER_VIEW_ID, _enabled);
+    syncViewRegistration();
     _lastFetch = millis() - (_updateHours * 3600000UL) + 10000UL;
   }
 
   void loop() override {
-    if (!_enabled || !OledBaseUsermod::isCurrentView(OLED_WEATHER_VIEW_ID)) return;
+    if (!_enabled || !OledBaseUsermod::isCurrentView(_registeredId)) return;
 
     unsigned long now = millis();
     unsigned long fetchInterval = (unsigned long)_updateHours * 3600000UL;
@@ -120,7 +135,6 @@ public:
       _lastFetch = now;
       fetchWeather();
     }
-
     if (now - _lastDraw >= 30000UL) {
       _lastDraw = now;
       draw();
@@ -130,6 +144,7 @@ public:
   void addToConfig(JsonObject& root) override {
     JsonObject top = root.createNestedObject("OledWeather");
     top["enabled"]       = _enabled;
+    top["viewId"]        = _viewId;
     top["apiKey"]        = _apiKey;
     top["city"]          = _city;
     top["country"]       = _country;
@@ -145,16 +160,18 @@ public:
     if (top.isNull()) return false;
 
     if (top.containsKey("enabled"))       _enabled      = top["enabled"];
+    if (top.containsKey("viewId"))        _viewId       = top["viewId"];
     if (top.containsKey("updateHours"))   _updateHours  = top["updateHours"];
     if (top.containsKey("showTemp"))      _showTemp     = top["showTemp"];
     if (top.containsKey("showDesc"))      _showDesc     = top["showDesc"];
     if (top.containsKey("showFeelsLike")) _showFeelsLike= top["showFeelsLike"];
     if (top.containsKey("useCelsius"))    _useCelsius   = top["useCelsius"];
+
     strlcpy(_apiKey,  top["apiKey"]  | "",        sizeof(_apiKey));
     strlcpy(_city,    top["city"]    | "Epernay", sizeof(_city));
     strlcpy(_country, top["country"] | "FR",      sizeof(_country));
 
-    OledBaseUsermod::setViewActive(OLED_WEATHER_VIEW_ID, _enabled);
+    syncViewRegistration();
     return true;
   }
 
@@ -162,7 +179,8 @@ public:
     JsonObject user = root["u"];
     if (user.isNull()) user = root.createNestedObject("u");
     JsonArray info = user.createNestedArray("Météo");
-    info.add(_enabled ? "vue active" : "désactivée");
+    info.add(_enabled ? "active" : "désactivée");
+    info.add(_registeredId);
   }
 
   uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }

@@ -1,24 +1,11 @@
 #include "wled.h"
 #include "../oled_base/oled_base.h"
 
-#define OLED_CLOCK_VIEW_ID 1
-
-struct OledPos { uint8_t col; uint8_t row; };
-
-static OledPos resolvePos(const char* pos, bool isBig) {
-  if      (strcmp(pos, "tl") == 0) return {0, 0};
-  else if (strcmp(pos, "tc") == 0) return {2, 0};
-  else if (strcmp(pos, "tr") == 0) return {8, 0};
-  else if (strcmp(pos, "ml") == 0) return {0, 2};
-  else if (strcmp(pos, "bl") == 0) return {0, isBig ? 4 : 6};
-  else if (strcmp(pos, "bc") == 0) return {2, isBig ? 4 : 6};
-  else if (strcmp(pos, "br") == 0) return {8, isBig ? 4 : 6};
-  return {0, 0};
-}
-
 class OledClockUsermod : public Usermod {
 private:
   bool    _enabled       = true;
+  uint8_t _viewId        = 1;
+  uint8_t _registeredId  = 1;
   bool    _showSeconds   = true;
   bool    _hour24        = true;
   uint8_t _timeFontSize  = 2;
@@ -29,6 +16,18 @@ private:
   uint8_t _dateFormat    = 0;
   unsigned long _lastDraw = 0;
 
+  struct OledPos { uint8_t col; uint8_t row; };
+  static OledPos resolvePos(const char* pos, bool isBig) {
+    if      (strcmp(pos, "tl") == 0) return {0, 0};
+    else if (strcmp(pos, "tc") == 0) return {2, 0};
+    else if (strcmp(pos, "tr") == 0) return {8, 0};
+    else if (strcmp(pos, "ml") == 0) return {0, 2};
+    else if (strcmp(pos, "bl") == 0) return {0, isBig ? 4 : 6};
+    else if (strcmp(pos, "bc") == 0) return {2, isBig ? 4 : 6};
+    else if (strcmp(pos, "br") == 0) return {8, isBig ? 4 : 6};
+    return {0, 0};
+  }
+
   const uint8_t* getFont(uint8_t size) {
     switch (size) {
       case 3:  return u8x8_font_courB18_2x3_r;
@@ -37,11 +36,26 @@ private:
     }
   }
 
+  uint8_t sanitizeViewId(uint8_t id) {
+    if (id < 1) return 1;
+    if (id > 31) return 31;
+    return id;
+  }
+
+  void syncViewRegistration() {
+    _viewId = sanitizeViewId(_viewId);
+    if (_registeredId != _viewId) {
+      OledBaseUsermod::setViewActive(_registeredId, false);
+      _registeredId = _viewId;
+    }
+    OledBaseUsermod::setViewActive(_registeredId, _enabled);
+  }
+
   void draw() {
     auto* d = OledBaseUsermod::getDisplay();
     if (!d) return;
-
     d->clearDisplay();
+
     char buf[20];
     time_t t = localTime;
     struct tm* ti = localtime(&t);
@@ -74,12 +88,10 @@ private:
   }
 
 public:
-  void setup() override {
-    OledBaseUsermod::setViewActive(OLED_CLOCK_VIEW_ID, _enabled);
-  }
+  void setup() override { syncViewRegistration(); }
 
   void loop() override {
-    if (!_enabled || !OledBaseUsermod::isCurrentView(OLED_CLOCK_VIEW_ID)) return;
+    if (!_enabled || !OledBaseUsermod::isCurrentView(_registeredId)) return;
     unsigned long now = millis();
     uint32_t interval = _showSeconds ? 1000 : 30000;
     if (now - _lastDraw < interval) return;
@@ -90,6 +102,7 @@ public:
   void addToConfig(JsonObject& root) override {
     JsonObject top = root.createNestedObject("OledClock");
     top["enabled"]      = _enabled;
+    top["viewId"]       = _viewId;
     top["showSeconds"]  = _showSeconds;
     top["hour24"]       = _hour24;
     top["timeFontSize"] = _timeFontSize;
@@ -105,6 +118,7 @@ public:
     if (top.isNull()) return false;
 
     if (top.containsKey("enabled"))      _enabled      = top["enabled"];
+    if (top.containsKey("viewId"))       _viewId       = top["viewId"];
     if (top.containsKey("showSeconds"))  _showSeconds  = top["showSeconds"];
     if (top.containsKey("hour24"))       _hour24       = top["hour24"];
     if (top.containsKey("timeFontSize")) _timeFontSize = top["timeFontSize"];
@@ -114,7 +128,7 @@ public:
     if (top.containsKey("timePos")) strlcpy(_timePos, top["timePos"] | "tl", sizeof(_timePos));
     if (top.containsKey("datePos")) strlcpy(_datePos, top["datePos"] | "bl", sizeof(_datePos));
 
-    OledBaseUsermod::setViewActive(OLED_CLOCK_VIEW_ID, _enabled);
+    syncViewRegistration();
     return true;
   }
 
@@ -122,7 +136,8 @@ public:
     JsonObject user = root["u"];
     if (user.isNull()) user = root.createNestedObject("u");
     JsonArray info = user.createNestedArray("Horloge");
-    info.add(_enabled ? "vue active" : "désactivée");
+    info.add(_enabled ? "active" : "désactivée");
+    info.add(_registeredId);
   }
 
   uint16_t getId() override { return USERMOD_ID_UNSPECIFIED; }
