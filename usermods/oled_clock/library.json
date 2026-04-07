@@ -1,0 +1,6 @@
+{
+  "name": "oled_clock",
+  "version": "1.0.0",
+  "build": { "libArchive": false },
+  "dependencies": {}
+}

@@ -1,0 +1,8 @@
+{
+  "name": "oled_base",
+  "version": "1.0.0",
+  "build": { "libArchive": false },
+  "dependencies": {
+    "U8g2": ">=2.28.0"
+  }
+}
