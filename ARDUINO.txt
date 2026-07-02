@@ -1,0 +1,881 @@
+#include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_AHTX0.h>
+#include <ArduinoJson.h>
+#include <ESP8266HTTPClient.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include <Adafruit_NeoPixel.h>
+
+// ----------------------
+// CONFIG WIFI
+// ----------------------
+const char* ssid = "WifiTam";
+const char* password = "Squiggle2Treason0";
+
+// ----------------------
+// OPENWEATHERMAP
+// ----------------------
+String apiKey = "35aa778ad543a33d93a9a9e9691a9a6b";
+String city   = "Epernay,FR";
+
+// ----------------------
+// OLED
+// ----------------------
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// ----------------------
+// AHT20
+// ----------------------
+Adafruit_AHTX0 aht;
+
+// ----------------------
+// NTP
+// ----------------------
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600); // +1h France
+
+// ----------------------
+// RUBAN LED WS2812
+// ----------------------
+#define LED_PIN     2
+#define LED_COUNT   64
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+bool ledState = true;
+
+#define BTN_POWER   12
+#define BTN_EFFECT  14
+
+bool oldBtnPower = HIGH;
+bool oldBtnEffect = HIGH;
+
+unsigned long debouncePower = 0;
+unsigned long debounceEffect = 0;
+const unsigned long debounceDelay = 200;
+
+// ----------------------
+// EFFETS LED
+// ----------------------
+const char* effectNames[] = {
+  "Confetti",
+  "White",
+  "Confetti+",
+  "Galaxy",
+  "Rainbow C",
+  "Rainbow",
+  "RainStorm",
+  "Blue",
+  "Red",
+  "Chase",
+  "Sparkle",
+  "Wire Slow",
+  "Wire RGB",
+  "ColorCycle"
+};
+
+const int effectCount = 14;
+int currentEffect = 0;
+
+unsigned long lastLedAnim = 0;
+uint16_t rainbowOffset = 0;
+uint16_t chasePos = 0;
+
+// ----------------------
+// PAGE LED PRIORITAIRE
+// ----------------------
+bool forceLedPage = false;
+unsigned long forceLedPageTime = 0;
+const unsigned long ledPageDuration = 5000;
+
+// ----------------------
+// PAGE SYSTEM
+// ----------------------
+int currentPage = 0;
+unsigned long lastPageSwitch = 0;
+const unsigned long pageInterval = 5000;
+
+// ----------------------
+// METEO
+// ----------------------
+String weatherMain = "";
+String weatherDesc = "";
+float tempExt      = 0;
+float humidityExt  = 0;
+float meteoVent    = 0;
+float pression     = 0;
+float ressenti     = 0;
+float visibilite   = 0;
+float uvIndex      = 0;
+float pluieProba   = 0;
+int sunriseHour = 0, sunriseMin = 0;
+int sunsetHour  = 0, sunsetMin  = 0;
+
+unsigned long lastWeather = 0;
+const unsigned long weatherInterval = 600000;
+
+// -----------------------------
+//     ANIMATIONS METEO
+// -----------------------------
+
+void drawSun(int x, int y, int frame) {
+  display.fillCircle(x, y, 10, SSD1306_WHITE);
+  for (int i = 0; i < 8; i++) {
+    float angle = (i * 45 + frame) * 0.0174533;
+    int x1 = x + cos(angle) * 14;
+    int y1 = y + sin(angle) * 14;
+    int x2 = x + cos(angle) * 20;
+    int y2 = y + sin(angle) * 20;
+    display.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
+  }
+}
+
+#define RAIN_COUNT 10
+int rainX[RAIN_COUNT];
+int rainY[RAIN_COUNT];
+
+void initRain() {
+  for (int i = 0; i < RAIN_COUNT; i++) {
+    rainX[i] = random(0, 128);
+    rainY[i] = random(-20, 64);
+  }
+}
+
+void drawRain() {
+  for (int i = 0; i < RAIN_COUNT; i++) {
+    display.drawLine(rainX[i], rainY[i], rainX[i], rainY[i] + 4, SSD1306_WHITE);
+    rainY[i] += 3;
+    if (rainY[i] > 64) {
+      rainY[i] = random(-20, 0);
+      rainX[i] = random(0, 128);
+    }
+  }
+}
+
+void drawWind(int frame) {
+  for (int y = 10; y < 50; y += 10) {
+    for (int x = 0; x < 128; x++) {
+      int offset = sin((x + frame) * 0.1) * 3;
+      display.drawPixel(x, y + offset, SSD1306_WHITE);
+    }
+  }
+}
+
+void drawCloud(int x, int y) {
+  display.fillCircle(x, y, 6, SSD1306_WHITE);
+  display.fillCircle(x + 6, y + 2, 8, SSD1306_WHITE);
+  display.fillCircle(x + 14, y, 6, SSD1306_WHITE);
+  display.fillRect(x, y, 16, 6, SSD1306_WHITE);
+}
+
+int cloudX = 0;
+
+void animateCloud() {
+  display.clearDisplay();
+  drawCloud(cloudX, 20);
+  cloudX += 1;
+  if (cloudX > 128) cloudX = -20;
+}
+
+bool lightning = false;
+int lightningFrame = 0;
+
+void drawLightning(int x, int y) {
+  display.drawLine(x, y, x + 3, y + 8, SSD1306_WHITE);
+  display.drawLine(x + 3, y + 8, x - 2, y + 16, SSD1306_WHITE);
+  display.drawLine(x - 2, y + 16, x + 4, y + 24, SSD1306_WHITE);
+}
+
+void animateStorm() {
+  display.clearDisplay();
+  display.setCursor(0,0);
+  display.println("METEO EPERNAY");
+
+  drawRain();
+
+  if (random(0, 100) > 95) {
+    lightning = true;
+    lightningFrame = 5;
+  }
+
+  if (lightning) {
+    drawLightning(60, 10);
+    lightningFrame--;
+    if (lightningFrame <= 0) lightning = false;
+  }
+}
+
+#define SNOW_COUNT 12
+int snowX[SNOW_COUNT];
+int snowY[SNOW_COUNT];
+
+void initSnow() {
+  for (int i = 0; i < SNOW_COUNT; i++) {
+    snowX[i] = random(0, 128);
+    snowY[i] = random(-64, 0);
+  }
+}
+
+void drawSnow() {
+  for (int i = 0; i < SNOW_COUNT; i++) {
+    display.drawPixel(snowX[i], snowY[i], SSD1306_WHITE);
+    snowY[i] += 1;
+    snowX[i] += sin(snowY[i] * 0.1) * 1.5;
+    if (snowY[i] > 64) {
+      snowY[i] = random(-10, 0);
+      snowX[i] = random(0, 128);
+    }
+  }
+}
+
+void drawFog(int frame) {
+  for (int y = 20; y < 50; y += 5) {
+    for (int x = 0; x < 128; x += 4) {
+      int noise = sin((x + frame) * 0.05) * 2;
+      display.drawPixel(x, y + noise, SSD1306_WHITE);
+    }
+  }
+}
+
+void drawMoon(int x, int y) {
+  display.fillCircle(x, y, 8, SSD1306_WHITE);
+  display.fillCircle(x + 3, y - 2, 8, SSD1306_BLACK);
+}
+
+void drawCloudRain() {
+  drawCloud(30, 15);
+  drawCloud(60, 20);
+  drawRain();
+}
+
+// ----------------------
+// METEO
+// ----------------------
+void getWeather() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  WiFiClient client;
+  HTTPClient http;
+
+  String url = "http://api.openweathermap.org/data/2.5/weather?q=" + city +
+               "&appid=" + apiKey + "&units=metric&lang=fr";
+
+  http.begin(client, url);
+  int httpCode = http.GET();
+
+  if (httpCode == 200) {
+    String payload = http.getString();
+    DynamicJsonDocument doc(4096);
+    if (deserializeJson(doc, payload)) {
+      http.end();
+      return;
+    }
+
+    weatherMain = doc["weather"][0]["main"].as<String>();
+    weatherDesc = doc["weather"][0]["description"].as<String>();
+    tempExt     = doc["main"]["temp"].as<float>();
+    humidityExt = doc["main"]["humidity"].as<float>();
+    meteoVent   = doc["wind"]["speed"].as<float>() * 3.6;
+    pression    = doc["main"]["pressure"].as<float>();
+    ressenti    = doc["main"]["feels_like"].as<float>();
+    visibilite  = doc["visibility"].as<float>() / 1000.0;
+
+    long sr = doc["sys"]["sunrise"].as<long>() + 3600;
+    long ss = doc["sys"]["sunset"].as<long>() + 3600;
+
+    sunriseHour = (sr % 86400L) / 3600;
+    sunriseMin  = (sr % 3600) / 60;
+    sunsetHour  = (ss % 86400L) / 3600;
+    sunsetMin   = (ss % 3600) / 60;
+
+    float lat = doc["coord"]["lat"].as<float>();
+    float lon = doc["coord"]["lon"].as<float>();
+
+    http.end();
+
+    HTTPClient http2;
+    String url2 = "http://api.openweathermap.org/data/3.0/onecall?lat=" + String(lat, 4) +
+                  "&lon=" + String(lon, 4) +
+                  "&appid=" + apiKey + "&units=metric&lang=fr";
+
+    http2.begin(client, url2);
+    int httpCode2 = http2.GET();
+
+    if (httpCode2 == 200) {
+      String payload2 = http2.getString();
+      DynamicJsonDocument doc2(8192);
+      if (!deserializeJson(doc2, payload2)) {
+        uvIndex    = doc2["current"]["uvi"].as<float>();
+        pluieProba = doc2["hourly"][0]["pop"].as<float>();
+      }
+    }
+    http2.end();
+  }
+  http.end();
+}
+
+// ----------------------
+// EFFETS LED
+// ----------------------
+
+void ledsOff() {
+  for (int i = 0; i < LED_COUNT; i++) strip.setPixelColor(i, 0);
+  strip.show();
+}
+
+void effectConfetti() {
+  strip.clear();
+  int p = random(LED_COUNT);
+  strip.setPixelColor(p, strip.Color(random(255), random(255), random(255)));
+  strip.show();
+}
+
+void effectConfettiPlus() {
+  for (int i = 0; i < LED_COUNT; i++) {
+    strip.setPixelColor(i, random(50,255), random(50,255), random(50,255));
+  }
+  strip.show();
+}
+
+void effectWhite() {
+  for (int i = 0; i < LED_COUNT; i++) strip.setPixelColor(i, 255,255,255);
+  strip.show();
+}
+
+void effectBlue() {
+  for (int i = 0; i < LED_COUNT; i++) strip.setPixelColor(i, 0,0,255);
+  strip.show();
+}
+
+void effectRed() {
+  for (int i = 0; i < LED_COUNT; i++) strip.setPixelColor(i, 255,0,0);
+  strip.show();
+}
+
+void effectRainbow() {
+  for (int i = 0; i < LED_COUNT; i++) {
+    strip.setPixelColor(i, strip.gamma32(strip.ColorHSV((i * 65536L / LED_COUNT) + rainbowOffset)));
+  }
+  strip.show();
+  rainbowOffset += 256;
+}
+
+void effectChase() {
+  strip.clear();
+  strip.setPixelColor(chasePos,255,255,255);
+  strip.show();
+  chasePos++;
+  if (chasePos >= LED_COUNT) chasePos = 0;
+}
+
+void effectSparkle() {
+  strip.clear();
+  for (int i = 0; i < 5; i++) {
+    int p = random(LED_COUNT);
+    strip.setPixelColor(p, random(255), random(255), random(255));
+  }
+  strip.show();
+}
+
+void effectGalaxy() {
+  strip.clear();
+  for (int i = 0; i < 12; i++) {
+    int p = random(LED_COUNT);
+    strip.setPixelColor(p, random(10,50), random(10,50), random(150,255));
+  }
+  strip.show();
+}
+
+void effectRainbowC() {
+  rainbowOffset += 1024;
+  for (int i = 0; i < LED_COUNT; i++) {
+    uint16_t hue = rainbowOffset + (i * 300);
+    strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hue)));
+  }
+  strip.show();
+}
+
+void effectRainStorm() {
+  strip.clear();
+  for (int i = 0; i < 10; i++) {
+    int p = random(LED_COUNT);
+    strip.setPixelColor(p, 0, 0, random(150,255));
+  }
+  strip.show();
+}
+
+void effectWireSlow() {
+  static int pos = 0;
+  strip.clear();
+  strip.setPixelColor(pos,255,255,255);
+  strip.show();
+  pos++;
+  if (pos >= LED_COUNT) pos = 0;
+}
+
+void effectWireRGB() {
+  static int pos = 0;
+  strip.clear();
+  strip.setPixelColor(pos,255,0,0);
+  if (pos > 0) strip.setPixelColor(pos-1,0,255,0);
+  if (pos > 1) strip.setPixelColor(pos-2,0,0,255);
+  strip.show();
+  pos++;
+  if (pos >= LED_COUNT) pos = 0;
+}
+
+void effectColorCycle() {
+  static byte mode = 0;
+  uint32_t c;
+  switch (mode) {
+    case 0: c = strip.Color(255,0,0); break;
+    case 1: c = strip.Color(0,255,0); break;
+    default: c = strip.Color(0,0,255); break;
+  }
+  for (int i = 0; i < LED_COUNT; i++) strip.setPixelColor(i, c);
+  strip.show();
+  static unsigned long t = 0;
+  if (millis() - t > 1000) {
+    mode++;
+    if (mode > 2) mode = 0;
+    t = millis();
+  }
+}
+
+// ----------------------
+// MAPPING CORRIGÉ DES 14 EFFETS
+// ----------------------
+void runLedEffect() {
+  if (!ledState) {
+    ledsOff();
+    return;
+  }
+
+  switch (currentEffect) {
+    case 0:  effectConfetti();      break;
+    case 1:  effectWhite();         break;
+    case 2:  effectConfettiPlus();  break;
+    case 3:  effectGalaxy();        break;
+    case 4:  effectRainbowC();      break;
+    case 5:  effectRainbow();       break;
+    case 6:  effectRainStorm();     break;
+    case 7:  effectBlue();          break;
+    case 8:  effectRed();           break;
+    case 9:  effectChase();         break;
+    case 10: effectSparkle();       break;
+    case 11: effectWireSlow();      break;
+    case 12: effectWireRGB();       break;
+    case 13: effectColorCycle();    break;
+  }
+}
+
+// ----------------------
+// SETUP
+// ----------------------
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+
+  initRain();
+  initSnow();
+
+  strip.begin();
+  strip.setBrightness(80);
+  strip.show();
+
+  pinMode(BTN_POWER, INPUT_PULLUP);
+  pinMode(BTN_EFFECT, INPUT_PULLUP);
+
+  randomSeed(analogRead(A0));
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi OK");
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.display();
+
+  aht.begin();
+  timeClient.begin();
+  timeClient.update();
+
+  getWeather();
+  lastWeather = millis();
+}
+// ----------------------
+// PAGE 1 — ANIMATION METEO EPERNAY
+// ----------------------
+void showPage1() {
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  static int frame = 0;
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("METEO EPERNAY");
+
+  if (weatherMain == "") {
+    display.setCursor(0, 20);
+    display.println("Aucune donnee");
+    display.display();
+    return;
+  }
+
+  // ☀️ Ciel dégagé
+  if (weatherMain == "Clear") {
+    if (isDayTime()) drawSun(100, 22, frame);
+    else drawMoon(100, 22);
+  }
+
+  // ☁️ Nuageux
+  else if (weatherMain == "Clouds") {
+    cloudX++;
+    if (cloudX > 128) cloudX = -20;
+    drawCloud(cloudX, 20);
+    if (!isDayTime()) drawMoon(100, 12);
+  }
+
+  // 🌧️ Pluie
+  else if (weatherMain == "Rain" || weatherMain == "Drizzle") {
+    drawCloud(35, 15);
+    drawCloud(65, 20);
+    drawRain();
+  }
+
+  // ⛈️ Orage
+  else if (weatherMain == "Thunderstorm") {
+    animateStorm();
+  }
+
+  // ❄️ Neige
+  else if (weatherMain == "Snow") {
+    drawSnow();
+  }
+
+  // 🌫️ Brouillard
+  else if (weatherMain == "Mist" || weatherMain == "Fog" || weatherMain == "Haze") {
+    drawFog(frame);
+  }
+
+  // Par défaut
+  else {
+    if (isDayTime()) drawSun(100, 22, frame);
+    else drawMoon(100, 22);
+  }
+
+  display.setTextSize(1);
+  display.setCursor(0, 52);
+  display.println(weatherDesc);
+
+  frame += 3;
+  display.display();
+}
+
+// ----------------------
+// PAGE 2 — HORLOGE
+// ----------------------
+void showPage2() {
+  timeClient.update();
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.println(timeClient.getFormattedTime());
+
+  time_t raw = timeClient.getEpochTime();
+  struct tm* ti = localtime(&raw);
+
+  display.setTextSize(2);
+  display.setCursor(0, 44);
+  display.printf("%02d/%02d/%04d", ti->tm_mday, ti->tm_mon + 1, ti->tm_year + 1900);
+
+  display.display();
+}
+
+// ----------------------
+// PAGE 3 — TEMP/HUMIDITÉ INTÉRIEURE
+// ----------------------
+void showPage3() {
+  sensors_event_t humidity, temp;
+  aht.getEvent(&humidity, &temp);
+
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("TEMPERATURE MAISON");
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.printf("Int:%.1fC", temp.temperature);
+
+  display.setCursor(0, 42);
+  display.printf("Hum:%.0f%%", humidity.relative_humidity);
+
+  display.display();
+}
+
+// ----------------------
+// PAGE 4 — METEO EPERNAY (Temp/Hum ext)
+// ----------------------
+void showPage4() {
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("TEMPERATURE EPERNAY");
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.printf("Temp:%.1fC", tempExt);
+
+  display.setCursor(0, 42);
+  display.printf("Hum:%.0f%%", humidityExt);
+
+  display.display();
+}
+
+// ----------------------
+// PAGE 5 — VENT + RESSENTI
+// ----------------------
+void showPage5() {
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("VENT RESSENTI");
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.printf("V:%.1fkm/h", meteoVent);
+
+  display.setCursor(0, 46);
+  display.printf("RES:%.1fC", ressenti);
+
+  display.display();
+}
+
+// ----------------------
+// PAGE 6 — PRESSION + VISIBILITE
+// ----------------------
+void showPage6() {
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("PRESSION VISIBILITE");
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.printf("P:%.0fhPa", pression);
+
+  display.setCursor(0, 46);
+  display.printf("V:%.1f km", visibilite);
+
+  display.display();
+}
+
+// ----------------------
+// PAGE 7 — LEVER DU SOLEIL
+// ----------------------
+void showPage7() {
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("LEVER DU SOLEIL");
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.printf("Lever:");
+
+  display.setCursor(0, 40);
+  display.printf("%02d:%02d", sunriseHour, sunriseMin);
+
+  display.display();
+}
+
+// ----------------------
+// PAGE 8 — COUCHER DU SOLEIL
+// ----------------------
+void showPage8() {
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("COUCHER DU SOLEIL");
+
+  display.setTextSize(2);
+  display.setCursor(0, 16);
+  display.printf("Coucher:");
+
+  display.setCursor(0, 40);
+  display.printf("%02d:%02d", sunsetHour, sunsetMin);
+
+  display.display();
+}
+
+// ----------------------
+// JOUR / NUIT
+// ----------------------
+bool isDayTime() {
+  time_t raw = timeClient.getEpochTime();
+  struct tm* ti = localtime(&raw);
+
+  int currentMinutes = ti->tm_hour * 60 + ti->tm_min;
+  int sunriseMinutes = sunriseHour * 60 + sunriseMin;
+  int sunsetMinutes  = sunsetHour * 60 + sunsetMin;
+
+  return (currentMinutes >= sunriseMinutes && currentMinutes < sunsetMinutes);
+}
+
+
+// ----------------------
+// PAGE 9 — ETAT LED
+// ----------------------
+void showPage9() {
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("RUBAN LED");
+
+  display.drawLine(0, 10, 127, 10, WHITE);
+
+  display.setTextSize(2);
+  display.setCursor(0, 18);
+  display.println(ledState ? "ON" : "OFF");
+
+  display.setTextSize(1);
+  display.setCursor(0, 40);
+
+  if (ledState) display.println(effectNames[currentEffect]);
+
+  display.display();
+}
+
+// ----------------------
+// GESTION DES BOUTONS
+// ----------------------
+void handleButtons() {
+  bool btnPower = digitalRead(BTN_POWER);
+  bool btnEffect = digitalRead(BTN_EFFECT);
+
+  // -------- POWER --------
+  if (btnPower == LOW && oldBtnPower == HIGH && millis() - debouncePower > debounceDelay) {
+    debouncePower = millis();
+    ledState = !ledState;
+
+    if (!ledState) {
+      for (int b = 80; b >= 0; b--) {
+        strip.setBrightness(b);
+        runLedEffect();
+        delay(2);
+      }
+      ledsOff();
+    } else {
+      strip.setBrightness(0);
+      for (int b = 0; b <= 80; b++) {
+        strip.setBrightness(b);
+        runLedEffect();
+        delay(2);
+      }
+    }
+
+    forceLedPage = true;
+    forceLedPageTime = millis();
+  }
+
+  oldBtnPower = btnPower;
+
+  // -------- EFFECT --------
+  if (btnEffect == LOW && oldBtnEffect == HIGH && millis() - debounceEffect > debounceDelay) {
+    debounceEffect = millis();
+
+    currentEffect++;
+    if (currentEffect >= effectCount) currentEffect = 0;
+
+    forceLedPage = true;
+    forceLedPageTime = millis();
+  }
+
+  oldBtnEffect = btnEffect;
+}
+// ----------------------
+// LOOP PRINCIPALE
+// ----------------------
+void loop() {
+
+  unsigned long now = millis();
+
+  // Gestion des boutons
+  handleButtons();
+
+  // Animation LED (toutes les 40 ms)
+  if (now - lastLedAnim > 40) {
+    lastLedAnim = now;
+    runLedEffect();
+  }
+
+  // Changement automatique des pages
+  if (now - lastPageSwitch > pageInterval) {
+    currentPage++;
+    if (currentPage > 14) currentPage = 0;
+    lastPageSwitch = now;
+  }
+
+  // Mise à jour météo toutes les 10 minutes
+  if (now - lastWeather > weatherInterval) {
+    getWeather();
+    lastWeather = now;
+  }
+
+  // Page LED prioritaire (après appui bouton)
+  if (forceLedPage) {
+    showPage9();
+    if (now - forceLedPageTime > ledPageDuration) {
+      forceLedPage = false;
+    }
+  }
+
+  // Sinon pages normales
+  else {
+    switch (currentPage) {
+      case 0: showPage1(); break;
+      case 1: showPage2(); break;
+      case 2: showPage1(); break;
+      case 3: showPage3(); break;
+      case 5: showPage1(); break;
+      case 6: showPage4(); break;
+      case 7: showPage1(); break;
+      case 8: showPage5(); break;
+      case 9: showPage1(); break;
+      case 10: showPage6(); break;
+      case 11: showPage1(); break;
+      case 12: showPage7(); break;
+      case 13: showPage1(); break;
+      case 14: showPage8(); break;
+      
+    }
+  }
+}

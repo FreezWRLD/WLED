@@ -1,7 +1,5 @@
 #include "wled.h"
 #include "../oled_base/oled_base.h"
-#include <ArduinoJson.h>
-#include <WiFiClientSecure.h>
 
 class OledWeatherUsermod : public Usermod {
 private:
@@ -34,7 +32,7 @@ private:
   enum FetchState : uint8_t { FS_IDLE, FS_CONNECT, FS_SEND, FS_READ, FS_DONE, FS_ERROR };
   FetchState _state = FS_IDLE;
 
-  WiFiClientSecure _client;
+  WiFiClient _client;
   String _request;
   String _response;
   String _langResolved;
@@ -74,7 +72,6 @@ private:
 
     _langResolved = detectWledLang();
     const char* units = _useCelsius ? "metric" : "imperial";
-    String scheme = _useHttps ? "https" : "http";
     String path = "/data/2.5/weather?q=" + String(_city) + "," + String(_country)
                 + "&appid=" + String(_apiKey)
                 + "&units=" + String(units)
@@ -87,7 +84,6 @@ private:
 
     _response = "";
     _client.stop();
-    _client.setInsecure();
     _fetchInProgress = true;
     _loading = true;
     _state = FS_CONNECT;
@@ -143,11 +139,9 @@ private:
 
     switch (_state) {
       case FS_CONNECT:
-        if (_useHttps) {
-          if (_client.connect("api.openweathermap.org", 443)) {
-            _state = FS_SEND;
-            _fetchStepStarted = now;
-          }
+        if (_client.connect("api.openweathermap.org", 80)) {
+          _state = FS_SEND;
+          _fetchStepStarted = now;
         } else {
           failFetch();
         }

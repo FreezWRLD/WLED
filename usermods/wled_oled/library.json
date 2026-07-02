@@ -1,0 +1,11 @@
+{
+  "name": "wled_oled",
+  "version": "1.0.0",
+  "build": { "libArchive": false },
+  "dependencies": {
+    "olikraus/U8g2": "~2.35.19",
+    "adafruit/Adafruit AHTX0": "^2.0.5",
+    "adafruit/Adafruit BMP280 Library": "^2.6.8",
+    "adafruit/Adafruit BusIO": "^1.16.2"
+  }
+}

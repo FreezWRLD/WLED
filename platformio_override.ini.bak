@@ -1,0 +1,11 @@
+# Example PlatformIO Project Configuration Override
+# ------------------------------------------------------------------------------
+# Copy to platformio_override.ini to activate overrides
+# ------------------------------------------------------------------------------
+# Please visit documentation: https://docs.platformio.org/page/projectconf.html
+
+[platformio]
+default_envs =  esp32dev # put the name(s) of your own build environment here. You can define as many as you need
+
+[env:esp32dev]
+custom_usermods = oled_base oled_clock oled_weather
