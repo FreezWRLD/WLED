@@ -6,6 +6,7 @@
 struct WeatherData {
   char    main[16]  = "";     // "Clear", "Rain", "Clouds", "Snow"...
   char    desc[48]  = "";     // Description localisée (ex: "Ciel dégagé")
+  char    city[32]  = "";     // Nom de la ville
   float   temp      = NAN;    // Température extérieure °C
   float   humidity  = NAN;    // Humidité extérieure %
   float   windKph   = NAN;    // Vent km/h

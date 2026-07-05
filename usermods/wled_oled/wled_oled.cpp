@@ -487,8 +487,22 @@ private:
   // PAGE 1 — MÉTÉO ANIMÉE
   // =====================================================
   void drawPageWeather() {
+    // Construct dynamic title based on the loaded weather city name in uppercase
+    char titleBuf[64];
+    if (g_weatherData.valid && g_weatherData.city[0] != '\0') {
+      char cityUpper[32];
+      strlcpy(cityUpper, g_weatherData.city, sizeof(cityUpper));
+      for (int i = 0; cityUpper[i]; i++) {
+        if (cityUpper[i] >= 'a' && cityUpper[i] <= 'z') {
+          cityUpper[i] -= 32;
+        }
+      }
+      snprintf(titleBuf, sizeof(titleBuf), "METEO %s", cityUpper);
+    } else {
+      strlcpy(titleBuf, "METEO", sizeof(titleBuf));
+    }
     _u8g2->setFont(u8g2_font_5x7_mr);
-    _u8g2->drawStr(0, 7, "METEO EPERNAY");
+    _u8g2->drawStr(0, 7, titleBuf);
     drawSeparator(9);
 
     if (!g_weatherData.valid) {

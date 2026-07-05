@@ -1,7 +1,11 @@
 #include "wled.h"
 #include "wled_weather_data.h"
-#include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
+#ifdef ARDUINO_ARCH_ESP32
+  #include <HTTPClient.h>
+#else
+  #include <ESP8266HTTPClient.h>
+  #include <WiFiClient.h>
+#endif
 
 // ============================================================
 // Configuration OpenWeatherMap — modifier ici si besoin
@@ -74,7 +78,9 @@ private:
   uint32_t _lastFetch   = 0;
 
   void doFetch() {
+#ifndef ARDUINO_ARCH_ESP32
     WiFiClient wifiClient;
+#endif
     HTTPClient http;
 
     String url = String(F("http://api.openweathermap.org/data/2.5/weather?q="))
@@ -83,7 +89,11 @@ private:
                + F("&units=metric&lang=fr");
 
     http.setTimeout(8000);
+#ifdef ARDUINO_ARCH_ESP32
+    if (!http.begin(url)) {
+#else
     if (!http.begin(wifiClient, url)) {
+#endif
       http.end();
       return;
     }
@@ -103,6 +113,7 @@ private:
 
     strlcpy(g_weatherData.main, doc["weather"][0]["main"] | "", sizeof(g_weatherData.main));
     strlcpy(g_weatherData.desc, doc["weather"][0]["description"] | "", sizeof(g_weatherData.desc));
+    strlcpy(g_weatherData.city, doc["name"] | _city, sizeof(g_weatherData.city));
     // Capitaliser la première lettre
     if (g_weatherData.desc[0] >= 'a' && g_weatherData.desc[0] <= 'z')
       g_weatherData.desc[0] -= 32;
