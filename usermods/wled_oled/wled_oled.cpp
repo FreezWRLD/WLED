@@ -68,6 +68,14 @@ public:
 
     _lastPageSwitch = millis();
     _lastSensorRead = millis() - SENSOR_READ_MS; // lire immédiatement
+
+    // Initialize state tracking variables for sleep timer on startup
+    _lastBri = bri;
+    _lastEffect = effectCurrent;
+    _lastShowLedStatusUntil = g_showLedStatusUntil;
+    _lastActivityTime = millis();
+    _screenAsleep = false;
+
     _initDone = true;
   }
 
@@ -80,6 +88,43 @@ public:
       _lastSensorRead = now;
       readSensors();
     }
+
+    // Detect activity (physical button presses or Web UI state changes)
+    bool activity = false;
+    if (bri != _lastBri) {
+      _lastBri = bri;
+      activity = true;
+    }
+    if (effectCurrent != _lastEffect) {
+      _lastEffect = effectCurrent;
+      activity = true;
+    }
+    if (g_showLedStatusUntil != _lastShowLedStatusUntil) {
+      _lastShowLedStatusUntil = g_showLedStatusUntil;
+      activity = true;
+    }
+
+    // Wake up screen on activity
+    if (activity) {
+      _lastActivityTime = now;
+      if (_screenAsleep) {
+        _screenAsleep = false;
+        if (_u8g2) {
+          _u8g2->setPowerSave(0);
+        }
+      }
+    }
+
+    // Check if timeout has been reached to turn off the screen
+    if (_sleepMin > 0 && !_screenAsleep && (now - _lastActivityTime >= _sleepMin * 60000UL)) {
+      _screenAsleep = true;
+      if (_u8g2) {
+        _u8g2->setPowerSave(1);
+      }
+    }
+
+    // Do not draw anything if the screen is asleep
+    if (_screenAsleep) return;
 
     // Cycle de pages
     if (now - _lastPageSwitch >= _cycleMs) {
@@ -103,6 +148,7 @@ public:
     top["contrast"]  = _contrast;
     top["flip"]      = _flip;
     top["cycleS"]    = _cycleMs / 1000;
+    top["sleepMin"]  = _sleepMin;
   }
 
   bool readFromConfig(JsonObject& root) override {
@@ -122,12 +168,32 @@ public:
     uint32_t cs = top["cycleS"] | 5;
     _cycleMs = constrain(cs, 1, 300) * 1000UL;
 
+    if (top.containsKey("sleepMin")) {
+      uint8_t sm = top["sleepMin"];
+      if (sm != _sleepMin) {
+        _sleepMin = sm;
+        _lastActivityTime = millis();
+        // If we disabled the sleep timer, ensure screen wakes up immediately
+        if (_sleepMin == 0 && _screenAsleep) {
+          _screenAsleep = false;
+          if (_u8g2) {
+            _u8g2->setPowerSave(0);
+          }
+        }
+      }
+    }
+
     if (_initDone && changed && _u8g2) {
       _u8g2->setContrast(_contrast);
       if (_flip) _u8g2->setDisplayRotation(U8G2_R2);
       else       _u8g2->setDisplayRotation(U8G2_R0);
     }
     return true;
+  }
+
+  // Add parameter description in settings page for the sleep timeout setting
+  void appendConfigData() override {
+    oappend(F("addInfo('WledOled:sleepMin',1,'Eteindre l\\'ecran (minutes, 0 = infini)');"));
   }
 
   void addToJsonInfo(JsonObject& root) override {
@@ -213,6 +279,14 @@ private:
   uint32_t _lastPageSwitch = 0;
   uint32_t _lastSensorRead = 0;
   uint32_t _lastDraw    = 0;
+
+  // Configurable screen timeout settings and tracking variables
+  uint8_t  _sleepMin    = 0;                     // Time in minutes before screen enters power save (0 = disabled)
+  bool     _screenAsleep = false;                // Tracks if screen is currently in power save mode
+  uint8_t  _lastBri     = 0;                     // Cached brightness value to detect user brightness adjustment activity
+  uint8_t  _lastEffect  = 0;                     // Cached effect value to detect user changing effect activity
+  uint32_t _lastShowLedStatusUntil = 0;          // Cached timestamp of button actions to detect physical button activity
+  uint32_t _lastActivityTime = 0;                // Milliseconds timestamp of the last detected user or state activity
 
   // ---- Données capteurs ----
   float _tempAht = NAN, _humAht = NAN;
@@ -413,7 +487,6 @@ private:
   // PAGE 1 — MÉTÉO ANIMÉE
   // =====================================================
   void drawPageWeather() {
-    // Titre
     _u8g2->setFont(u8g2_font_5x7_mr);
     _u8g2->drawStr(0, 7, "METEO EPERNAY");
     drawSeparator(9);
