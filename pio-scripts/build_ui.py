@@ -19,3 +19,4 @@ else:
     if (exitCode):
       print('\x1b[0;31;43m' + 'npm run build fails check https://kno.wled.ge/advanced/compiling-wled/' + '\x1b[0m')
       exit(exitCode)
+
